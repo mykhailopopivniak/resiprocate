@@ -450,6 +450,40 @@ bool Uri::compareUriParametersEqual(Parameter* param1, Parameter* param2)
    }
 }
 
+bool Uri::compareUriParametersLessThan(Parameter* param1, Parameter* param2)
+{
+   if (!param1 || !param2)
+   {
+      return false;
+   }
+
+   switch (param1->getType()) {
+      case ParameterTypes::user:
+      case ParameterTypes::method:
+      case ParameterTypes::maddr:
+      case ParameterTypes::transport:
+         return isLessThanNoCase(dynamic_cast<DataParameter*>(param1)->value(),
+                                 dynamic_cast<DataParameter*>(param2)->value());
+
+      case ParameterTypes::ttl:
+         return dynamic_cast<UInt32Parameter*>(param1)->value() <
+                dynamic_cast<UInt32Parameter*>(param2)->value();
+
+      case ParameterTypes::gr:
+         return isLessThanNoCase(dynamic_cast<ExistsOrDataParameter*>(param1)->value(),
+                                 dynamic_cast<ExistsOrDataParameter*>(param2)->value());
+
+      case ParameterTypes::lr:
+         // Exists parameters are equal.
+         return false;
+
+      default:
+         // Other parameters are not considered.
+         // Parameters may be added accordingly to RFCs.
+         return false;
+   }
+}
+
 bool Uri::isSignificantUriParameter(const ParameterTypes::Type type) noexcept
 {
    return type == ParameterTypes::user ||
@@ -669,7 +703,95 @@ Uri::operator<(const Uri& other) const
       return false;
    }
 
-   return mPort < other.mPort;
+   if (mPort < other.mPort)
+   {
+      return true;
+   }
+
+   if (mPort > other.mPort)
+   {
+      return false;
+   }
+
+   for (ParameterList::const_iterator it = mParameters.begin(); it != mParameters.end(); ++it)
+      {
+         Parameter* otherParam = other.getParameterByEnum((*it)->getType());
+
+         if (otherParam)
+         {
+            if (Uri::compareUriParametersLessThan(*it, otherParam)) {
+               return true;
+            }
+
+            if (Uri::compareUriParametersLessThan(otherParam, *it)) {
+               return false;
+            }
+         }
+         else if (Uri::isSignificantUriParameter((*it)->getType()))
+         {
+            return true;  // Significant URI params should not be ignored.
+         }
+      }
+
+   OrderUnknownParameters orderUnknown;
+
+#if defined(__SUNPRO_CC) || defined(WIN32) || defined(__sun__)
+   using std::set<Parameter*, OrderUnknownParameters> ParameterSet;
+   ParameterSet unA, unB;
+
+   for (ParameterList::const_iterator i = mUnknownParameters.begin();
+        i != mUnknownParameters.end(); ++i)
+   {
+      unA.insert(*i);
+   }
+   for (ParameterList::const_iterator i = other.mUnknownParameters.begin();
+        i != other.mUnknownParameters.end(); ++i)
+   {
+      unB.insert(*i);
+   }
+#else
+   ParameterList unA = mUnknownParameters;
+   ParameterList unB = other.mUnknownParameters;
+
+   sort(unA.begin(), unA.end(), orderUnknown);
+   sort(unB.begin(), unB.end(), orderUnknown);
+#endif
+
+   auto a = unA.begin();
+   auto b = unB.begin();
+
+   while(a != unA.end() && b != unB.end())
+   {
+      if (orderUnknown(*a, *b))
+      {
+         ++a;
+      }
+      else if (orderUnknown(*b, *a))
+      {
+         ++b;
+      }
+      else
+      {
+         const Data& valueA = dynamic_cast<UnknownParameter*>(*a)->value();
+         const Data& valueB = dynamic_cast<UnknownParameter*>(*b)->value();
+
+         if (isLessThanNoCase(valueA,
+                              valueB))
+         {
+            return true;
+         }
+
+         if (isLessThanNoCase(valueB,
+                              valueA))
+         {
+            return false;
+         }
+         ++a;
+         ++b;
+      }
+   }
+
+   return false;
 }
 
 bool
